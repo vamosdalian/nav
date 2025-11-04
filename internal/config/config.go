@@ -19,10 +19,10 @@ func Load() (*Config, error) {
 	config := &Config{
 		ServerPort:    getEnv("PORT", "8080"),
 		OSMDataPath:   getEnv("OSM_DATA_PATH", ""),
-		GraphDataPath: getEnv("GRAPH_DATA_PATH", "graph.bin.gz"),
+		GraphDataPath: getEnv("GRAPH_DATA_PATH", "graph.bin.snappy"),
 		LogLevel:      getEnv("LOG_LEVEL", "info"),
 	}
-	
+
 	return config, nil
 }
 
@@ -58,4 +58,3 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
-

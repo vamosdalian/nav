@@ -34,7 +34,7 @@ clean:
 # Download sample OSM data (Monaco - small dataset)
 download-sample:
 	@echo "Downloading Monaco OSM data (~1MB)..."
-	curl -o monaco-latest.osm.pbf https://download.geofabrik.de/europe/monaco-latest.osm.pbf
+	curl -L -o monaco-latest.osm.pbf https://download.geofabrik.de/europe/monaco-latest.osm.pbf
 	@echo "Download complete!"
 
 # Run with sample data
