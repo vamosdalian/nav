@@ -4,6 +4,16 @@
 
 This navigation service is designed as a high-performance, production-grade routing system for OpenStreetMap data, similar to OSRM and Valhalla but with enhanced runtime flexibility.
 
+**Version**: 1.2.0  
+**Last Updated**: 2025-11-04
+
+## Recent Enhancements (v1.2.0)
+
+- ✅ **Routing Profiles**: Car, bike, and pedestrian routing
+- ✅ **Turn Restrictions**: Automatic OSM restriction parsing and enforcement
+- ✅ **Enhanced Oneway**: Support for reverse oneways (oneway=-1)
+- ✅ **Profile-based Weights**: Dynamic weight calculation per transportation mode
+
 ## Design Principles
 
 1. **Simplicity**: Clean, maintainable Go code

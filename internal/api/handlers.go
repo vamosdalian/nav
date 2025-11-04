@@ -33,6 +33,7 @@ type RouteRequest struct {
 	ToLon        float64 `json:"to_lon"`
 	Alternatives int     `json:"alternatives,omitempty"`
 	Format       string  `json:"format,omitempty"` // "geojson" (default) or "polyline"
+	Profile      string  `json:"profile,omitempty"` // "car" (default), "bike", or "foot"
 }
 
 // RouteResponse represents a routing response
@@ -74,14 +75,20 @@ func (s *Server) HandleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Find routes
+	// Get routing profile
+	profile := routing.GetProfile(req.Profile)
+	
+	// Find routes with the specified profile
 	var routes []*routing.Route
 	var err error
 	
 	if req.Alternatives > 0 {
+		// Temporarily set profile for multiple routes
+		s.router.SetProfile(profile)
 		routes, err = s.router.FindMultipleRoutes(req.FromLat, req.FromLon, req.ToLat, req.ToLon, req.Alternatives)
+		s.router.SetProfile(routing.CarProfile) // Reset to default
 	} else {
-		route, routeErr := s.router.FindRoute(req.FromLat, req.FromLon, req.ToLat, req.ToLon)
+		route, routeErr := s.router.FindRouteWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, profile)
 		if routeErr == nil {
 			routes = []*routing.Route{route}
 		}
@@ -159,6 +166,8 @@ func (s *Server) HandleRouteGet(w http.ResponseWriter, r *http.Request) {
 		format = "geojson"
 	}
 	
+	profile := r.URL.Query().Get("profile")
+	
 	// Use the same logic as POST handler
 	req := RouteRequest{
 		FromLat:      fromLat,
@@ -167,6 +176,7 @@ func (s *Server) HandleRouteGet(w http.ResponseWriter, r *http.Request) {
 		ToLon:        toLon,
 		Alternatives: alternatives,
 		Format:       format,
+		Profile:      profile,
 	}
 	
 	// Reuse route finding logic
@@ -175,13 +185,18 @@ func (s *Server) HandleRouteGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Get routing profile
+	profileObj := routing.GetProfile(req.Profile)
+	
 	var routes []*routing.Route
 	var err error
 	
 	if req.Alternatives > 0 {
+		s.router.SetProfile(profileObj)
 		routes, err = s.router.FindMultipleRoutes(req.FromLat, req.FromLon, req.ToLat, req.ToLon, req.Alternatives)
+		s.router.SetProfile(routing.CarProfile) // Reset to default
 	} else {
-		route, routeErr := s.router.FindRoute(req.FromLat, req.FromLon, req.ToLat, req.ToLon)
+		route, routeErr := s.router.FindRouteWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, profileObj)
 		if routeErr == nil {
 			routes = []*routing.Route{route}
 		}

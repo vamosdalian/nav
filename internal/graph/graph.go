@@ -25,16 +25,18 @@ type Edge struct {
 
 // Graph represents the road network
 type Graph struct {
-	nodes     map[int64]*Node
-	edges     map[int64][]Edge // adjacency list: nodeID -> outgoing edges
-	mutex     sync.RWMutex
+	nodes        map[int64]*Node
+	edges        map[int64][]Edge // adjacency list: nodeID -> outgoing edges
+	restrictions map[int64][]TurnRestriction // nodeID -> turn restrictions at that node
+	mutex        sync.RWMutex
 }
 
 // NewGraph creates a new empty graph
 func NewGraph() *Graph {
 	return &Graph{
-		nodes: make(map[int64]*Node),
-		edges: make(map[int64][]Edge),
+		nodes:        make(map[int64]*Node),
+		edges:        make(map[int64][]Edge),
+		restrictions: make(map[int64][]TurnRestriction),
 	}
 }
 

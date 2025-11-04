@@ -28,7 +28,7 @@ func (p *Parser) ParseFile(filepath string) error {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer f.Close()
-	
+
 	return p.Parse(f)
 }
 
@@ -37,16 +37,19 @@ func (p *Parser) Parse(r io.Reader) error {
 	// Use scanner with 3 concurrent decoders for better compatibility
 	scanner := osmpbf.New(context.Background(), r, 3)
 	defer scanner.Close()
-	
+
 	// First pass: collect all nodes
 	allNodes := make(map[int64]*graph.Node)
-	
+
 	// Collect ways
 	ways := make([]*osm.Way, 0)
-	
+
+	// Collect relations (for turn restrictions)
+	relations := make([]*osm.Relation, 0)
+
 	for scanner.Scan() {
 		obj := scanner.Object()
-		
+
 		switch v := obj.(type) {
 		case *osm.Node:
 			allNodes[int64(v.ID)] = &graph.Node{
@@ -54,18 +57,23 @@ func (p *Parser) Parse(r io.Reader) error {
 				Lat: v.Lat,
 				Lon: v.Lon,
 			}
-			
+
 		case *osm.Way:
 			if p.isRoutableWay(v) {
 				ways = append(ways, v)
 			}
+
+		case *osm.Relation:
+			if p.isRestrictionRelation(v) {
+				relations = append(relations, v)
+			}
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scanner error: %w", err)
 	}
-	
+
 	// Find which nodes are actually used in routable ways
 	usedNodes := make(map[int64]bool)
 	for _, way := range ways {
@@ -73,7 +81,7 @@ func (p *Parser) Parse(r io.Reader) error {
 			usedNodes[int64(node.ID)] = true
 		}
 	}
-	
+
 	// Add only used nodes to graph
 	nodeCount := 0
 	for nodeID := range usedNodes {
@@ -82,7 +90,7 @@ func (p *Parser) Parse(r io.Reader) error {
 			nodeCount++
 		}
 	}
-	
+
 	// Process ways and create edges
 	edgeCount := 0
 	for _, way := range ways {
@@ -90,9 +98,18 @@ func (p *Parser) Parse(r io.Reader) error {
 		p.processWay(way, allNodes)
 		edgeCount += p.graph.EdgeCount() - edgesBefore
 	}
-	
-	fmt.Printf("Loaded %d nodes (from %d total) and %d routable ways\n", nodeCount, len(allNodes), len(ways))
-	
+
+	// Process turn restrictions
+	restrictionCount := 0
+	for _, relation := range relations {
+		if p.processRestriction(relation) {
+			restrictionCount++
+		}
+	}
+
+	fmt.Printf("Loaded %d nodes (from %d total), %d routable ways, and %d turn restrictions\n",
+		nodeCount, len(allNodes), len(ways), restrictionCount)
+
 	return nil
 }
 
@@ -102,18 +119,18 @@ func (p *Parser) isRoutableWay(way *osm.Way) bool {
 	if highway == "" {
 		return false
 	}
-	
+
 	// Filter out non-routable highways
 	nonRoutable := map[string]bool{
-		"footway":     true,
-		"path":        true,
-		"steps":       true,
-		"cycleway":    true,
-		"pedestrian":  true,
+		"footway":      true,
+		"path":         true,
+		"steps":        true,
+		"cycleway":     true,
+		"pedestrian":   true,
 		"construction": true,
-		"proposed":    true,
+		"proposed":     true,
 	}
-	
+
 	return !nonRoutable[highway]
 }
 
@@ -122,43 +139,49 @@ func (p *Parser) processWay(way *osm.Way, nodes map[int64]*graph.Node) {
 	if len(way.Nodes) < 2 {
 		return
 	}
-	
+
+	// Check for oneway restrictions
 	oneway := false
-	if v := way.Tags.Find("oneway"); v == "yes" {
+	onewayTag := way.Tags.Find("oneway")
+	if onewayTag == "yes" || onewayTag == "1" || onewayTag == "true" {
 		oneway = true
 	}
-	
+	// Special case: oneway=-1 means reverse direction only
+	reverseOneway := (onewayTag == "-1" || onewayTag == "reverse")
+
 	maxSpeed := p.getMaxSpeed(way)
 	tags := p.extractTags(way)
-	
+
 	for i := 0; i < len(way.Nodes)-1; i++ {
 		fromID := int64(way.Nodes[i].ID)
 		toID := int64(way.Nodes[i+1].ID)
-		
+
 		fromNode, fromExists := nodes[fromID]
 		toNode, toExists := nodes[toID]
-		
+
 		if !fromExists || !toExists {
 			continue
 		}
-		
+
 		distance := graph.HaversineDistance(
 			fromNode.Lat, fromNode.Lon,
 			toNode.Lat, toNode.Lon,
 		)
-		
-		// Create forward edge
-		p.graph.AddEdge(graph.Edge{
-			From:     fromID,
-			To:       toID,
-			Weight:   distance,
-			OSMWayID: int64(way.ID),
-			MaxSpeed: maxSpeed,
-			Tags:     tags,
-		})
-		
-		// Create backward edge if not oneway
-		if !oneway {
+
+		// Create forward edge (unless reverse oneway)
+		if !reverseOneway {
+			p.graph.AddEdge(graph.Edge{
+				From:     fromID,
+				To:       toID,
+				Weight:   distance,
+				OSMWayID: int64(way.ID),
+				MaxSpeed: maxSpeed,
+				Tags:     tags,
+			})
+		}
+
+		// Create backward edge if not oneway (or if reverse oneway)
+		if !oneway || reverseOneway {
 			p.graph.AddEdge(graph.Edge{
 				From:     toID,
 				To:       fromID,
@@ -179,38 +202,88 @@ func (p *Parser) getMaxSpeed(way *osm.Way) float64 {
 		fmt.Sscanf(maxspeed, "%f", &speed)
 		return speed / 3.6 // Convert km/h to m/s
 	}
-	
+
 	// Default speeds based on highway type (m/s)
 	highway := way.Tags.Find("highway")
 	defaults := map[string]float64{
-		"motorway":       33.33, // 120 km/h
-		"trunk":          27.78, // 100 km/h
-		"primary":        22.22, // 80 km/h
-		"secondary":      19.44, // 70 km/h
-		"tertiary":       13.89, // 50 km/h
-		"residential":    8.33,  // 30 km/h
-		"service":        5.56,  // 20 km/h
-		"unclassified":   13.89, // 50 km/h
+		"motorway":     33.33, // 120 km/h
+		"trunk":        27.78, // 100 km/h
+		"primary":      22.22, // 80 km/h
+		"secondary":    19.44, // 70 km/h
+		"tertiary":     13.89, // 50 km/h
+		"residential":  8.33,  // 30 km/h
+		"service":      5.56,  // 20 km/h
+		"unclassified": 13.89, // 50 km/h
 	}
-	
+
 	if speed, exists := defaults[highway]; exists {
 		return speed
 	}
-	
+
 	return 13.89 // Default 50 km/h
 }
 
 // extractTags extracts relevant tags from way
 func (p *Parser) extractTags(way *osm.Way) map[string]string {
 	tags := make(map[string]string)
-	
-	relevantKeys := []string{"highway", "name", "surface", "lanes"}
+
+	relevantKeys := []string{"highway", "name", "surface", "lanes", "oneway"}
 	for _, key := range relevantKeys {
 		if value := way.Tags.Find(key); value != "" {
 			tags[key] = value
 		}
 	}
-	
+
 	return tags
 }
 
+// isRestrictionRelation checks if a relation is a turn restriction
+func (p *Parser) isRestrictionRelation(relation *osm.Relation) bool {
+	relType := relation.Tags.Find("type")
+	return relType == "restriction" || relType == "restriction:conditional"
+}
+
+// processRestriction processes a turn restriction relation
+func (p *Parser) processRestriction(relation *osm.Relation) bool {
+	restriction := relation.Tags.Find("restriction")
+	if restriction == "" {
+		return false
+	}
+
+	var fromWay, toWay int64
+	var viaNode int64
+
+	// Parse relation members
+	for _, member := range relation.Members {
+		switch member.Role {
+		case "from":
+			if member.Type == osm.TypeWay {
+				fromWay = int64(member.Ref)
+			}
+		case "to":
+			if member.Type == osm.TypeWay {
+				toWay = int64(member.Ref)
+			}
+		case "via":
+			if member.Type == osm.TypeNode {
+				viaNode = int64(member.Ref)
+			}
+			// Note: Some restrictions use via way, we'll skip those for now
+		}
+	}
+
+	// We only handle simple node-based restrictions
+	if fromWay == 0 || toWay == 0 || viaNode == 0 {
+		return false
+	}
+
+	// Add restriction to graph
+	p.graph.AddRestriction(graph.TurnRestriction{
+		FromWay: fromWay,
+		ViaNode: viaNode,
+		ToWay:   toWay,
+		Type:    restriction,
+	})
+
+	return true
+}

@@ -96,6 +96,32 @@ curl -X POST http://localhost:8080/route \
   }'
 ```
 
+### Test Different Routing Profiles
+
+```bash
+# Bicycle routing (prefers bike lanes)
+curl -X POST http://localhost:8080/route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_lat": 43.73,
+    "from_lon": 7.42,
+    "to_lat": 43.74,
+    "to_lon": 7.43,
+    "profile": "bike"
+  }'
+
+# Pedestrian routing (can use footways and stairs)
+curl -X POST http://localhost:8080/route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_lat": 43.73,
+    "from_lon": 7.42,
+    "to_lat": 43.74,
+    "to_lon": 7.43,
+    "profile": "foot"
+  }'
+```
+
 ### Update Road Weights (Simulate Traffic)
 
 ```bash

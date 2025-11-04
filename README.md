@@ -6,6 +6,9 @@ A high-performance navigation service built in Go, similar to OSRM and Valhalla.
 
 - **Fast Routing**: A* algorithm with Haversine heuristic for optimal geographic routing
 - **Multiple Routes**: Find alternative routes using penalty-based method
+- **Routing Profiles**: Car, bike, and pedestrian routing with optimized weights
+- **Turn Restrictions**: Automatic parsing and enforcement of OSM turn restrictions
+- **Oneway Support**: Complete oneway and reverse oneway handling
 - **Dynamic Weights**: Modify road weights in real-time to simulate traffic conditions
 - **Multiple Formats**: GeoJSON and Polyline formats
 - **OSM Support**: Parse and process OpenStreetMap PBF data
@@ -93,6 +96,7 @@ Find route between two points.
 - `to_lat`, `to_lon`: Destination coordinates  
 - `alternatives` (optional): Number of alternative routes
 - `format` (optional): Geometry format - `"geojson"` (default) or `"polyline"`
+- `profile` (optional): Routing profile - `"car"` (default), `"bike"`, or `"foot"`
 
 **Response (GeoJSON format - default):**
 ```json
@@ -151,6 +155,7 @@ GET /route/get?from_lat=43.73&from_lon=7.42&to_lat=43.74&to_lon=7.43&alternative
 - `to_lat`, `to_lon`: Destination coordinates  
 - `alternatives` (optional): Number of alternative routes (default: 0)
 - `format` (optional): Geometry format - `geojson` or `polyline` (default: `geojson`)
+- `profile` (optional): Routing profile - `car`, `bike`, or `foot` (default: `car`)
 
 ### POST /weight/update
 
@@ -194,6 +199,45 @@ The service uses the A* algorithm with the following characteristics:
 - **Heuristic**: Haversine distance (great-circle distance)
 - **Edge Weights**: Based on road distance and speed limits
 - **Optimality**: Guarantees shortest path when heuristic is admissible
+
+### Routing Profiles
+
+Three pre-configured routing profiles for different transportation modes:
+
+#### Car Profile (Default)
+- **Allowed Roads**: Motorways, trunk roads, primary/secondary/tertiary roads, residential
+- **Speed Optimization**: Highways +20% faster, residential -20% slower
+- **Max Speed**: 120 km/h
+- **Use Cases**: Car navigation, driving directions
+
+#### Bike Profile
+- **Allowed Roads**: Cycleways, paths, residential, secondary roads (avoids motorways)
+- **Speed Optimization**: Cycleways +20% preferred, primary roads -30% (less safe)
+- **Avoids**: Gravel and sand surfaces
+- **Max Speed**: 30 km/h
+- **Use Cases**: Bicycle navigation, cycling routes
+
+#### Foot Profile
+- **Allowed Roads**: Footways, pedestrian areas, steps, paths, residential
+- **Speed Optimization**: Footways +20% preferred, stairs -20% slower
+- **Max Speed**: 5 km/h
+- **Use Cases**: Walking directions, pedestrian navigation
+
+### Turn Restrictions
+
+Automatically parses and enforces OSM turn restrictions:
+
+- ❌ **No-turn restrictions**: `no_left_turn`, `no_right_turn`, `no_u_turn`, `no_straight_on`
+- ✅ **Only-turn restrictions**: `only_left_turn`, `only_right_turn`, `only_straight_on`
+- Monaco dataset includes **44 turn restrictions** automatically enforced
+
+### Oneway Support
+
+Complete handling of one-way streets:
+
+- ✅ `oneway=yes` or `oneway=1` - Forward direction only
+- ✅ `oneway=-1` or `oneway=reverse` - Reverse direction only
+- ✅ Prevents routing against traffic flow
 
 ### Alternative Routes
 
@@ -261,18 +305,17 @@ CMD ["./nav-server"]
 ## Example Usage
 
 ```bash
-# Find a route (default GeoJSON format)
+# Find a route (car, default)
 curl -X POST http://localhost:8080/route \
   -H "Content-Type: application/json" \
   -d '{
     "from_lat": 43.73,
     "from_lon": 7.42,
     "to_lat": 43.74,
-    "to_lon": 7.43,
-    "alternatives": 2
+    "to_lon": 7.43
   }'
 
-# Find a route with Polyline format (50-70% smaller)
+# Find a bicycle route
 curl -X POST http://localhost:8080/route \
   -H "Content-Type: application/json" \
   -d '{
@@ -280,7 +323,31 @@ curl -X POST http://localhost:8080/route \
     "from_lon": 7.42,
     "to_lat": 43.74,
     "to_lon": 7.43,
+    "profile": "bike"
+  }'
+
+# Find a walking route with Polyline format
+curl -X POST http://localhost:8080/route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_lat": 43.73,
+    "from_lon": 7.42,
+    "to_lat": 43.74,
+    "to_lon": 7.43,
+    "profile": "foot",
     "format": "polyline"
+  }'
+
+# Find alternative car routes
+curl -X POST http://localhost:8080/route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_lat": 43.73,
+    "from_lon": 7.42,
+    "to_lat": 43.74,
+    "to_lon": 7.43,
+    "alternatives": 2,
+    "profile": "car"
   }'
 
 # Update weights (simulate heavy traffic)
@@ -316,12 +383,49 @@ Contributions welcome! Please open an issue or submit a pull request.
 
 ## Roadmap
 
-- [ ] Add support for turn restrictions
-- [ ] Implement Dijkstra rank for bi-directional search
-- [ ] Add routing profiles (car, bike, pedestrian)
-- [ ] Support for time-dependent routing
-- [ ] Add isochrone generation
-- [ ] Implement map matching
-- [ ] Add GraphQL API
-- [ ] Performance benchmarks
+### High Priority (重要且常用)
+
+- [ ] **Routing Profiles** (car, bike, pedestrian) - 不同交通方式的路由配置
+  - 影响: 扩展应用场景，满足多种出行需求
+  - 难度: 中等
+  - 价值: ⭐⭐⭐⭐⭐
+
+- [ ] **Turn Restrictions** - 转弯限制支持
+  - 影响: 提高路线准确性，避免非法转弯
+  - 难度: 中等
+  - 价值: ⭐⭐⭐⭐⭐
+
+- [ ] **Performance Benchmarks** - 性能基准测试
+  - 影响: 了解系统性能瓶颈，优化方向
+  - 难度: 低
+  - 价值: ⭐⭐⭐⭐
+
+### Medium Priority (有用但不紧急)
+
+- [ ] **Bidirectional A*** - 双向搜索优化
+  - 影响: 提升长距离路线查询速度 2-3倍
+  - 难度: 中等
+  - 价值: ⭐⭐⭐⭐
+
+- [ ] **Isochrone Generation** - 等时圈生成
+  - 影响: 新功能，可视化可达范围
+  - 难度: 中等
+  - 价值: ⭐⭐⭐
+
+- [ ] **Map Matching** - GPS轨迹匹配
+  - 影响: 支持轨迹分析和导航纠偏
+  - 难度: 高
+  - 价值: ⭐⭐⭐
+
+### Low Priority (可选功能)
+
+- [ ] **Time-Dependent Routing** - 时间相关路由
+  - 影响: 支持实时交通和高峰期路由
+  - 难度: 高
+  - 价值: ⭐⭐
+
+- [ ] **GraphQL API** - GraphQL 接口
+  - 影响: 提供更灵活的 API 查询方式
+  - 难度: 低
+  - 价值: ⭐⭐
 

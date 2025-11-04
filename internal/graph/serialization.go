@@ -2,8 +2,9 @@ package graph
 
 // ExportData exports graph data for serialization
 type ExportData struct {
-	Nodes map[int64]*Node
-	Edges map[int64][]Edge
+	Nodes        map[int64]*Node
+	Edges        map[int64][]Edge
+	Restrictions map[int64][]TurnRestriction
 }
 
 // Export exports the graph data
@@ -12,8 +13,9 @@ func (g *Graph) Export() *ExportData {
 	defer g.mutex.RUnlock()
 	
 	return &ExportData{
-		Nodes: g.nodes,
-		Edges: g.edges,
+		Nodes:        g.nodes,
+		Edges:        g.edges,
+		Restrictions: g.restrictions,
 	}
 }
 
@@ -24,5 +26,10 @@ func (g *Graph) Import(data *ExportData) {
 	
 	g.nodes = data.Nodes
 	g.edges = data.Edges
+	if data.Restrictions != nil {
+		g.restrictions = data.Restrictions
+	} else {
+		g.restrictions = make(map[int64][]TurnRestriction)
+	}
 }
 
