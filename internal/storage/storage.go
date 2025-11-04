@@ -1,11 +1,12 @@
 package storage
 
 import (
-	"compress/gzip"
+	"bufio"
 	"encoding/gob"
 	"fmt"
 	"os"
 
+	"github.com/golang/snappy"
 	"github.com/vamosdalian/nav/internal/graph"
 )
 
@@ -26,19 +27,24 @@ func (s *Storage) Save(g *graph.Graph) error {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
 	defer file.Close()
-	
-	gzWriter := gzip.NewWriter(file)
-	defer gzWriter.Close()
-	
-	encoder := gob.NewEncoder(gzWriter)
-	
+
+	// Use buffered writer for better I/O performance
+	bufWriter := bufio.NewWriterSize(file, 1024*1024) // 1MB buffer
+	defer bufWriter.Flush()
+
+	// Use snappy compression for fast compression/decompression
+	snappyWriter := snappy.NewBufferedWriter(bufWriter)
+	defer snappyWriter.Close()
+
+	encoder := gob.NewEncoder(snappyWriter)
+
 	// Export and encode graph data
 	data := g.Export()
-	
+
 	if err := encoder.Encode(data); err != nil {
 		return fmt.Errorf("failed to encode graph: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -49,24 +55,23 @@ func (s *Storage) Load() (*graph.Graph, error) {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
-	
-	gzReader, err := gzip.NewReader(file)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gzReader.Close()
-	
-	decoder := gob.NewDecoder(gzReader)
-	
+
+	// Use buffered reader for better I/O performance
+	bufReader := bufio.NewReader(file)
+
+	// Use snappy decompression for fast decompression
+	snappyReader := snappy.NewReader(bufReader)
+
+	decoder := gob.NewDecoder(snappyReader)
+
 	var data graph.ExportData
 	if err := decoder.Decode(&data); err != nil {
 		return nil, fmt.Errorf("failed to decode graph: %w", err)
 	}
-	
+
 	// Reconstruct graph
 	g := graph.NewGraph()
 	g.Import(&data)
-	
+
 	return g, nil
 }
-

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	parseOnly := flag.Bool("parse-only", false, "Parse OSM data, save graph, and exit without starting server")
+	flag.Parse()
+
 	log.Println("Starting Navigation Service...")
 
 	// Load configuration
@@ -62,12 +66,25 @@ func main() {
 			store := storage.NewStorage(cfg.GraphDataPath)
 			if err := store.Save(g); err != nil {
 				log.Printf("Warning: Failed to save graph: %v", err)
+			} else {
+				log.Printf("Graph saved successfully")
+				if *parseOnly {
+					log.Println("Parse-only mode: exiting without starting server")
+					return
+				}
 			}
+		} else if *parseOnly {
+			log.Fatal("Parse-only mode requires GRAPH_DATA_PATH to be set")
 		}
 	}
 
 	if g == nil {
 		log.Fatal("No graph data available. Set OSM_DATA_PATH or GRAPH_DATA_PATH")
+	}
+
+	if *parseOnly {
+		log.Println("Parse-only mode: graph already loaded, exiting without starting server")
+		return
 	}
 
 	// Initialize router

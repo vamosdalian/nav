@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"time"
 
 	"github.com/paulmach/osm"
 	"github.com/paulmach/osm/osmpbf"
@@ -47,6 +49,13 @@ func (p *Parser) Parse(r io.Reader) error {
 	// Collect relations (for turn restrictions)
 	relations := make([]*osm.Relation, 0)
 
+	// Progress tracking
+	var nodeCount, wayCount, relationCount int64
+	lastProgressTime := time.Now()
+	progressInterval := 5 * time.Second
+
+	log.Println("Phase 1/5: Scanning OSM data...")
+
 	for scanner.Scan() {
 		obj := scanner.Object()
 
@@ -57,58 +66,89 @@ func (p *Parser) Parse(r io.Reader) error {
 				Lat: v.Lat,
 				Lon: v.Lon,
 			}
+			nodeCount++
 
 		case *osm.Way:
 			if p.isRoutableWay(v) {
 				ways = append(ways, v)
 			}
+			wayCount++
 
 		case *osm.Relation:
 			if p.isRestrictionRelation(v) {
 				relations = append(relations, v)
 			}
+			relationCount++
+		}
+
+		// Show progress every 2 seconds
+		if time.Since(lastProgressTime) >= progressInterval {
+			log.Printf("  Progress: %d nodes, %d ways (%d routable), %d relations scanned...",
+				nodeCount, wayCount, len(ways), relationCount)
+			lastProgressTime = time.Now()
 		}
 	}
+
+	log.Printf("Phase 1/5: Complete - Scanned %d nodes, %d ways, %d relations",
+		nodeCount, wayCount, relationCount)
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scanner error: %w", err)
 	}
 
 	// Find which nodes are actually used in routable ways
+	log.Println("Phase 2/5: Filtering used nodes...")
 	usedNodes := make(map[int64]bool)
 	for _, way := range ways {
 		for _, node := range way.Nodes {
 			usedNodes[int64(node.ID)] = true
 		}
 	}
+	log.Printf("Phase 2/5: Complete - Found %d used nodes (from %d total)",
+		len(usedNodes), len(allNodes))
 
 	// Add only used nodes to graph
-	nodeCount := 0
+	log.Println("Phase 3/5: Adding nodes to graph...")
+	graphNodeCount := 0
 	for nodeID := range usedNodes {
 		if node, exists := allNodes[nodeID]; exists {
 			p.graph.AddNode(node)
-			nodeCount++
+			graphNodeCount++
 		}
 	}
+	log.Printf("Phase 3/5: Complete - Added %d nodes to graph", graphNodeCount)
 
 	// Process ways and create edges
-	edgeCount := 0
+	log.Println("Phase 4/5: Processing ways and creating edges...")
+	lastProgressTime = time.Now()
+	processedWays := 0
 	for _, way := range ways {
-		edgesBefore := p.graph.EdgeCount()
 		p.processWay(way, allNodes)
-		edgeCount += p.graph.EdgeCount() - edgesBefore
+		processedWays++
+
+		// Show progress every 2 seconds
+		if time.Since(lastProgressTime) >= progressInterval {
+			progress := float64(processedWays) / float64(len(ways)) * 100
+			log.Printf("  Progress: %d/%d ways processed (%.1f%%), %d edges created...",
+				processedWays, len(ways), progress, p.graph.EdgeCount())
+			lastProgressTime = time.Now()
+		}
 	}
+	log.Printf("Phase 4/5: Complete - Processed %d ways, created %d edges",
+		len(ways), p.graph.EdgeCount())
 
 	// Process turn restrictions
+	log.Println("Phase 5/5: Processing turn restrictions...")
 	restrictionCount := 0
 	for _, relation := range relations {
 		if p.processRestriction(relation) {
 			restrictionCount++
 		}
 	}
+	log.Printf("Phase 5/5: Complete - Processed %d turn restrictions", restrictionCount)
 
-	fmt.Printf("Loaded %d nodes (from %d total), %d routable ways, and %d turn restrictions\n",
-		nodeCount, len(allNodes), len(ways), restrictionCount)
+	log.Printf("✓ OSM parsing complete: %d nodes, %d edges, %d restrictions",
+		graphNodeCount, p.graph.EdgeCount(), restrictionCount)
 
 	return nil
 }
