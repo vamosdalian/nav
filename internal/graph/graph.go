@@ -25,18 +25,20 @@ type Edge struct {
 
 // Graph represents the road network
 type Graph struct {
-	nodes        map[int64]*Node
-	edges        map[int64][]Edge // adjacency list: nodeID -> outgoing edges
-	restrictions map[int64][]TurnRestriction // nodeID -> turn restrictions at that node
-	mutex        sync.RWMutex
+	nodes         map[int64]*Node
+	edges         map[int64][]Edge // adjacency list: nodeID -> outgoing edges
+	reverseEdges  map[int64][]Edge // reverse adjacency list: nodeID -> incoming edges
+	restrictions  map[int64][]TurnRestriction // nodeID -> turn restrictions at that node
+	mutex         sync.RWMutex
 }
 
 // NewGraph creates a new empty graph
 func NewGraph() *Graph {
 	return &Graph{
-		nodes:        make(map[int64]*Node),
-		edges:        make(map[int64][]Edge),
-		restrictions: make(map[int64][]TurnRestriction),
+		nodes:         make(map[int64]*Node),
+		edges:         make(map[int64][]Edge),
+		reverseEdges:  make(map[int64][]Edge),
+		restrictions:  make(map[int64][]TurnRestriction),
 	}
 }
 
@@ -52,6 +54,9 @@ func (g *Graph) AddEdge(edge Edge) {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 	g.edges[edge.From] = append(g.edges[edge.From], edge)
+	
+	// Also add to reverse adjacency list for bidirectional search
+	g.reverseEdges[edge.To] = append(g.reverseEdges[edge.To], edge)
 }
 
 // GetNode returns a node by ID
@@ -71,6 +76,13 @@ func (g *Graph) GetEdges(nodeID int64) []Edge {
 	g.mutex.RLock()
 	defer g.mutex.RUnlock()
 	return g.edges[nodeID]
+}
+
+// GetReverseEdges returns all incoming edges to a node
+func (g *Graph) GetReverseEdges(nodeID int64) []Edge {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
+	return g.reverseEdges[nodeID]
 }
 
 // UpdateEdgeWeight updates the weight of a specific edge

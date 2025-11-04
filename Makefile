@@ -4,6 +4,10 @@
 build:
 	go build -o nav-server cmd/server/main.go
 
+# Build benchmark tool
+build-benchmark:
+	go build -o nav-benchmark cmd/benchmark/main.go
+
 # Run the server
 run:
 	go run cmd/server/main.go
@@ -12,9 +16,19 @@ run:
 test:
 	go test -v ./...
 
+# Run benchmarks
+bench:
+	go test -bench=. -benchtime=100x ./internal/routing/
+
+# Run full benchmark suite
+benchmark: build-benchmark
+	./nav-benchmark
+
 # Clean build artifacts
 clean:
 	rm -f nav-server
+	rm -f nav-benchmark
+	rm -f main
 	rm -f graph.bin.gz
 
 # Download sample OSM data (Monaco - small dataset)
@@ -47,14 +61,17 @@ build-prod:
 # Help
 help:
 	@echo "Available targets:"
-	@echo "  build          - Build the server binary"
-	@echo "  run            - Run the server"
-	@echo "  test           - Run tests"
-	@echo "  clean          - Clean build artifacts"
+	@echo "  build           - Build the server binary"
+	@echo "  build-benchmark - Build benchmark tool"
+	@echo "  run             - Run the server"
+	@echo "  test            - Run tests"
+	@echo "  bench           - Run Go benchmarks"
+	@echo "  benchmark       - Run full benchmark suite"
+	@echo "  clean           - Clean build artifacts"
 	@echo "  download-sample - Download sample OSM data (Monaco)"
-	@echo "  run-sample     - Download and run with sample data"
-	@echo "  deps           - Download dependencies"
-	@echo "  fmt            - Format code"
-	@echo "  lint           - Run linter"
-	@echo "  build-prod     - Build for production"
+	@echo "  run-sample      - Download and run with sample data"
+	@echo "  deps            - Download dependencies"
+	@echo "  fmt             - Format code"
+	@echo "  lint            - Run linter"
+	@echo "  build-prod      - Build for production"
 

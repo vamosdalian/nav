@@ -114,11 +114,11 @@ type edgeKey struct {
 	from, to int64
 }
 
-// nodeState tracks routing state including previous way for turn restriction checks
-type nodeState struct {
-	nodeID     int64
-	prevWayID  int64 // OSM way ID of the edge we came from
-	prevNodeID int64 // Previous node (for turn restriction checks)
+// stateKey represents a routing state with node and previous way
+// Used for turn restriction checks
+type stateKey struct {
+	nodeID    int64
+	prevWayID int64
 }
 
 func (r *Router) findRouteWithPenalty(fromLat, fromLon, toLat, toLon float64, penalties map[edgeKey]float64) (*Route, error) {
