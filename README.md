@@ -7,6 +7,7 @@ A high-performance navigation service built in Go, similar to OSRM and Valhalla.
 - **Fast Routing**: A* algorithm with Haversine heuristic for optimal geographic routing
 - **Multiple Routes**: Find alternative routes using penalty-based method
 - **Dynamic Weights**: Modify road weights in real-time to simulate traffic conditions
+- **Multiple Formats**: GeoJSON and Polyline formats
 - **OSM Support**: Parse and process OpenStreetMap PBF data
 - **REST API**: Clean HTTP API for easy integration
 - **Efficient Storage**: Graph serialization for fast startup times
@@ -78,31 +79,63 @@ Find route between two points.
 **Request:**
 ```json
 {
-  "from_lat": 43.7384,
-  "from_lon": 7.4246,
-  "to_lat": 43.7312,
-  "to_lon": 7.4197,
-  "alternatives": 2
+  "from_lat": 43.73,
+  "from_lon": 7.42,
+  "to_lat": 43.74,
+  "to_lon": 7.43,
+  "alternatives": 2,
+  "format": "geojson"
 }
 ```
 
-**Response:**
+**Parameters:**
+- `from_lat`, `from_lon`: Starting coordinates
+- `to_lat`, `to_lon`: Destination coordinates  
+- `alternatives` (optional): Number of alternative routes
+- `format` (optional): Geometry format - `"geojson"` (default) or `"polyline"`
+
+**Response (GeoJSON format - default):**
 ```json
 {
   "code": "Ok",
+  "format": "geojson",
   "routes": [
     {
-      "distance": 1234.56,
-      "duration": 88.85,
-      "geometry": [
-        [7.4246, 43.7384],
-        [7.4240, 43.7380],
-        [7.4197, 43.7312]
-      ]
+      "distance": 2927.70,
+      "duration": 210.78,
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [7.4184524, 43.7299355],
+          [7.4185197, 43.7293154],
+          [7.4185385, 43.7291224]
+        ]
+      }
     }
   ]
 }
 ```
+
+**Response (Polyline format):**
+```json
+{
+  "code": "Ok",
+  "format": "polyline",
+  "routes": [
+    {
+      "distance": 2927.70,
+      "duration": 210.78,
+      "geometry": "y~gxGkdifC?zB@n@BZ?VJj@Lh@Pr@..."
+    }
+  ]
+}
+```
+
+**Geometry Formats:**
+- **GeoJSON** (default): Standard GeoJSON LineString - best for map visualization
+- **Polyline**: Google Polyline encoded string - 50-70% smaller, saves bandwidth
+
+See [docs/GEOMETRY_FORMATS.md](docs/GEOMETRY_FORMATS.md) for detailed format documentation.
 
 ### GET /route/get
 
@@ -110,8 +143,14 @@ Find route using query parameters.
 
 **Example:**
 ```
-GET /route/get?from_lat=43.7384&from_lon=7.4246&to_lat=43.7312&to_lon=7.4197&alternatives=1
+GET /route/get?from_lat=43.73&from_lon=7.42&to_lat=43.74&to_lon=7.43&alternatives=1&format=geojson
 ```
+
+**Query Parameters:**
+- `from_lat`, `from_lon`: Starting coordinates
+- `to_lat`, `to_lon`: Destination coordinates  
+- `alternatives` (optional): Number of alternative routes (default: 0)
+- `format` (optional): Geometry format - `geojson` or `polyline` (default: `geojson`)
 
 ### POST /weight/update
 
@@ -222,15 +261,26 @@ CMD ["./nav-server"]
 ## Example Usage
 
 ```bash
-# Find a route
+# Find a route (default GeoJSON format)
 curl -X POST http://localhost:8080/route \
   -H "Content-Type: application/json" \
   -d '{
-    "from_lat": 43.7384,
-    "from_lon": 7.4246,
-    "to_lat": 43.7312,
-    "to_lon": 7.4197,
+    "from_lat": 43.73,
+    "from_lon": 7.42,
+    "to_lat": 43.74,
+    "to_lon": 7.43,
     "alternatives": 2
+  }'
+
+# Find a route with Polyline format (50-70% smaller)
+curl -X POST http://localhost:8080/route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_lat": 43.73,
+    "from_lon": 7.42,
+    "to_lat": 43.74,
+    "to_lon": 7.43,
+    "format": "polyline"
   }'
 
 # Update weights (simulate heavy traffic)

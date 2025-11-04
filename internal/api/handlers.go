@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/vamosdalian/nav/internal/encoding"
 	"github.com/vamosdalian/nav/internal/graph"
 	"github.com/vamosdalian/nav/internal/routing"
 )
@@ -26,24 +27,26 @@ func NewServer(r *routing.Router, g *graph.Graph) *Server {
 
 // RouteRequest represents a routing request
 type RouteRequest struct {
-	FromLat float64 `json:"from_lat"`
-	FromLon float64 `json:"from_lon"`
-	ToLat   float64 `json:"to_lat"`
-	ToLon   float64 `json:"to_lon"`
-	Alternatives int `json:"alternatives,omitempty"`
+	FromLat      float64 `json:"from_lat"`
+	FromLon      float64 `json:"from_lon"`
+	ToLat        float64 `json:"to_lat"`
+	ToLon        float64 `json:"to_lon"`
+	Alternatives int     `json:"alternatives,omitempty"`
+	Format       string  `json:"format,omitempty"` // "geojson" (default) or "polyline"
 }
 
 // RouteResponse represents a routing response
 type RouteResponse struct {
 	Routes []RouteInfo `json:"routes"`
 	Code   string      `json:"code"`
+	Format string      `json:"format,omitempty"` // Format used for geometry
 }
 
 // RouteInfo contains route details
 type RouteInfo struct {
 	Distance float64     `json:"distance"`
 	Duration float64     `json:"duration"`
-	Geometry [][2]float64 `json:"geometry"`
+	Geometry interface{} `json:"geometry"` // Can be [][2]float64, string (polyline), or GeoJSON
 }
 
 // ErrorResponse represents an error response
@@ -90,17 +93,32 @@ func (s *Server) HandleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Determine output format (default: geojson)
+	format := req.Format
+	if format == "" {
+		format = "geojson"
+	}
+	
 	// Build response
 	response := RouteResponse{
 		Code:   "Ok",
+		Format: format,
 		Routes: make([]RouteInfo, len(routes)),
 	}
 	
 	for i, route := range routes {
-		geometry := make([][2]float64, len(route.Nodes))
+		coordinates := make([][2]float64, len(route.Nodes))
 		for j, nodeID := range route.Nodes {
 			node, _ := s.graph.GetNode(nodeID)
-			geometry[j] = [2]float64{node.Lon, node.Lat}
+			coordinates[j] = [2]float64{node.Lon, node.Lat}
+		}
+		
+		var geometry interface{}
+		switch format {
+		case "polyline":
+			geometry = encoding.EncodePolyline(coordinates)
+		default: // "geojson" or empty
+			geometry = encoding.NewLineStringGeometry(coordinates)
 		}
 		
 		response.Routes[i] = RouteInfo{
@@ -136,13 +154,19 @@ func (s *Server) HandleRouteGet(w http.ResponseWriter, r *http.Request) {
 		alternatives, _ = strconv.Atoi(alt)
 	}
 	
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "geojson"
+	}
+	
 	// Use the same logic as POST handler
 	req := RouteRequest{
-		FromLat: fromLat,
-		FromLon: fromLon,
-		ToLat:   toLat,
-		ToLon:   toLon,
+		FromLat:      fromLat,
+		FromLon:      fromLon,
+		ToLat:        toLat,
+		ToLon:        toLon,
 		Alternatives: alternatives,
+		Format:       format,
 	}
 	
 	// Reuse route finding logic
@@ -171,14 +195,23 @@ func (s *Server) HandleRouteGet(w http.ResponseWriter, r *http.Request) {
 	
 	response := RouteResponse{
 		Code:   "Ok",
+		Format: req.Format,
 		Routes: make([]RouteInfo, len(routes)),
 	}
 	
 	for i, route := range routes {
-		geometry := make([][2]float64, len(route.Nodes))
+		coordinates := make([][2]float64, len(route.Nodes))
 		for j, nodeID := range route.Nodes {
 			node, _ := s.graph.GetNode(nodeID)
-			geometry[j] = [2]float64{node.Lon, node.Lat}
+			coordinates[j] = [2]float64{node.Lon, node.Lat}
+		}
+		
+		var geometry interface{}
+		switch req.Format {
+		case "polyline":
+			geometry = encoding.EncodePolyline(coordinates)
+		default: // "geojson" or empty
+			geometry = encoding.NewLineStringGeometry(coordinates)
 		}
 		
 		response.Routes[i] = RouteInfo{
