@@ -25,7 +25,7 @@ go.work
 # Graph cache files
 *.bin
 *.bin.gz
-graph.bin.gz
+*bin.snappy
 
 # IDE
 .idea/
