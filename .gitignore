@@ -5,6 +5,7 @@
 *.so
 *.dylib
 nav-server
+nav-benchmark
 nav
 
 # Test binary
