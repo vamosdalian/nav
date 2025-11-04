@@ -1,0 +1,103 @@
+name: "car"
+description: "Standard car routing profile"
+version: "1.0"
+
+settings:
+  max_speed_kmh: 120
+  default_speed_kmh: 50
+
+# Highway type configurations
+highways:
+  motorway:
+    allowed: true
+    speed_factor: 1.2
+    preference: 1.0
+
+  trunk:
+    allowed: true
+    speed_factor: 1.1
+    preference: 1.0
+
+  primary:
+    allowed: true
+    speed_factor: 1.0
+    preference: 1.0
+
+  secondary:
+    allowed: true
+    speed_factor: 0.95
+    preference: 1.0
+
+  tertiary:
+    allowed: true
+    speed_factor: 0.9
+    preference: 1.0
+
+  residential:
+    allowed: true
+    speed_factor: 0.8
+    preference: 0.9
+
+  service:
+    allowed: true
+    speed_factor: 0.7
+    preference: 0.8
+
+  motorway_link:
+    allowed: true
+    speed_factor: 1.0
+    preference: 1.0
+
+  trunk_link:
+    allowed: true
+    speed_factor: 1.0
+    preference: 1.0
+
+  primary_link:
+    allowed: true
+    speed_factor: 1.0
+    preference: 1.0
+
+  secondary_link:
+    allowed: true
+    speed_factor: 0.95
+    preference: 1.0
+
+  unclassified:
+    allowed: true
+    speed_factor: 0.8
+    preference: 0.8
+
+# Surface type configurations
+surfaces:
+  asphalt:
+    penalty: 1.0
+
+  concrete:
+    penalty: 1.0
+
+  paved:
+    penalty: 1.0
+
+  gravel:
+    penalty: 1.5
+
+  unpaved:
+    penalty: 2.0
+
+  dirt:
+    penalty: 2.5
+
+# Routing features
+features:
+  avoid_tolls: false
+  avoid_highways: false
+  avoid_ferries: false
+  avoid_tunnels: false
+  allow_uturns: true
+
+# Weight calculation formula
+weight_formula:
+  use_time: false
+  distance_weight: 1.0
+  time_weight: 0.0

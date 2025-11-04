@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/vamosdalian/nav/internal/encoding"
 	"github.com/vamosdalian/nav/internal/graph"
@@ -13,19 +15,21 @@ import (
 
 // Server holds the HTTP server dependencies
 type Server struct {
-	router *routing.Router
-	graph  *graph.Graph
+	router         *routing.Router
+	graph          *graph.Graph
+	profileManager *routing.ProfileManager
 }
 
 // NewServer creates a new API server
-func NewServer(r *routing.Router, g *graph.Graph) *Server {
+func NewServer(r *routing.Router, g *graph.Graph, pm *routing.ProfileManager) *Server {
 	return &Server{
-		router: r,
-		graph:  g,
+		router:         r,
+		graph:          g,
+		profileManager: pm,
 	}
 }
 
-// RouteRequest represents a routing request
+// RouteRequest represents a routing request (flat structure for GET/POST compatibility)
 type RouteRequest struct {
 	FromLat        float64 `json:"from_lat"`
 	FromLon        float64 `json:"from_lon"`
@@ -33,8 +37,16 @@ type RouteRequest struct {
 	ToLon          float64 `json:"to_lon"`
 	Alternatives   int     `json:"alternatives,omitempty"`
 	Format         string  `json:"format,omitempty"`         // "geojson" (default) or "polyline"
-	Profile        string  `json:"profile,omitempty"`        // "car" (default), "bike", or "foot"
-	Unidirectional bool    `json:"unidirectional,omitempty"` // Force unidirectional A* (default: false, uses bidirectional)
+	Profile        string  `json:"profile,omitempty"`        // Profile name (e.g., "car")
+	Unidirectional bool    `json:"unidirectional,omitempty"` // Force unidirectional A* (default: false)
+
+	// Runtime overrides (flat structure for GET query params)
+	AvoidTolls    *bool    `json:"avoid_tolls,omitempty"`
+	AvoidHighways *bool    `json:"avoid_highways,omitempty"`
+	AvoidFerries  *bool    `json:"avoid_ferries,omitempty"`
+	AvoidTunnels  *bool    `json:"avoid_tunnels,omitempty"`
+	AllowUturns   *bool    `json:"allow_uturns,omitempty"`
+	MaxSpeed      *float64 `json:"max_speed,omitempty"` // km/h
 }
 
 // RouteResponse represents a routing response
@@ -57,16 +69,29 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-// HandleRoute handles route requests
+// HandleRoute handles route requests (supports both GET and POST)
 func (s *Server) HandleRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.sendError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST method is allowed")
-		return
-	}
-
 	var req RouteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON request")
+	var err error
+
+	switch r.Method {
+	case http.MethodPost:
+		// Parse JSON body
+		if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.sendError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON request")
+			return
+		}
+
+	case http.MethodGet:
+		// Parse query parameters
+		req, err = s.parseRouteQueryParams(r)
+		if err != nil {
+			s.sendError(w, http.StatusBadRequest, "invalid_parameters", err.Error())
+			return
+		}
+
+	default:
+		s.sendError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET and POST methods are allowed")
 		return
 	}
 
@@ -76,177 +101,86 @@ func (s *Server) HandleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get routing profile
-	profile := routing.GetProfile(req.Profile)
-
-	// Find routes with the specified profile
-	var routes []*routing.Route
-	var err error
-
-	if req.Alternatives > 0 {
-		// Temporarily set profile for multiple routes
-		s.router.SetProfile(profile)
-		routes, err = s.router.FindMultipleRoutes(req.FromLat, req.FromLon, req.ToLat, req.ToLon, req.Alternatives)
-		s.router.SetProfile(routing.CarProfile) // Reset to default
-	} else {
-		var route *routing.Route
-		var routeErr error
-
-		// Default to bidirectional A* (11x faster), unless explicitly disabled
-		if req.Unidirectional {
-			route, routeErr = s.router.FindRouteWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, profile)
-		} else {
-			route, routeErr = s.router.FindRouteBidirectionalWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, profile)
-		}
-
-		if routeErr == nil {
-			routes = []*routing.Route{route}
-		}
-		err = routeErr
+	// Get effective routing profile
+	effectiveProfile, err := s.getEffectiveProfile(&req)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid_profile", err.Error())
+		return
 	}
 
+	// Find routes with the specified profile
+	routes, err := s.findRoutes(req, effectiveProfile)
 	if err != nil {
 		s.sendError(w, http.StatusNotFound, "no_route", err.Error())
 		return
 	}
 
-	// Determine output format (default: geojson)
-	format := req.Format
-	if format == "" {
-		format = "geojson"
-	}
-
-	// Build response
-	response := RouteResponse{
-		Code:   "Ok",
-		Format: format,
-		Routes: make([]RouteInfo, len(routes)),
-	}
-
-	for i, route := range routes {
-		coordinates := make([][2]float64, len(route.Nodes))
-		for j, nodeID := range route.Nodes {
-			node, _ := s.graph.GetNode(nodeID)
-			coordinates[j] = [2]float64{node.Lon, node.Lat}
-		}
-
-		var geometry interface{}
-		switch format {
-		case "polyline":
-			geometry = encoding.EncodePolyline(coordinates)
-		default: // "geojson" or empty
-			geometry = encoding.NewLineStringGeometry(coordinates)
-		}
-
-		response.Routes[i] = RouteInfo{
-			Distance: route.Distance,
-			Duration: route.Duration,
-			Geometry: geometry,
-		}
-	}
-
-	s.sendJSON(w, http.StatusOK, response)
+	// Build and send response
+	s.sendRouteResponse(w, routes, req.Format)
 }
 
-// HandleRouteGet handles GET-based route requests (OSRM-compatible)
-func (s *Server) HandleRouteGet(w http.ResponseWriter, r *http.Request) {
+// HandleListProfiles handles listing all available profiles
+func (s *Server) HandleListProfiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.sendError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET method is allowed")
 		return
 	}
 
-	// Parse query parameters
-	fromLat, err1 := strconv.ParseFloat(r.URL.Query().Get("from_lat"), 64)
-	fromLon, err2 := strconv.ParseFloat(r.URL.Query().Get("from_lon"), 64)
-	toLat, err3 := strconv.ParseFloat(r.URL.Query().Get("to_lat"), 64)
-	toLon, err4 := strconv.ParseFloat(r.URL.Query().Get("to_lon"), 64)
+	profiles := s.profileManager.ListProfiles()
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"code":     "Ok",
+		"profiles": profiles,
+		"count":    len(profiles),
+	})
+}
 
-	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid_parameters", "Invalid coordinate parameters")
+// HandleGetProfile handles getting a specific profile details
+func (s *Server) HandleGetProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.sendError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET method is allowed")
 		return
 	}
 
-	alternatives := 0
-	if alt := r.URL.Query().Get("alternatives"); alt != "" {
-		alternatives, _ = strconv.Atoi(alt)
-	}
-
-	format := r.URL.Query().Get("format")
-	if format == "" {
-		format = "geojson"
-	}
-
-	profile := r.URL.Query().Get("profile")
-
-	// Use the same logic as POST handler
-	req := RouteRequest{
-		FromLat:      fromLat,
-		FromLon:      fromLon,
-		ToLat:        toLat,
-		ToLon:        toLon,
-		Alternatives: alternatives,
-		Format:       format,
-		Profile:      profile,
-	}
-
-	// Reuse route finding logic
-	if !s.validateCoordinates(req.FromLat, req.FromLon) || !s.validateCoordinates(req.ToLat, req.ToLon) {
-		s.sendError(w, http.StatusBadRequest, "invalid_coordinates", "Invalid coordinates")
+	// Extract profile name from URL path
+	// Expecting /profiles/{name}
+	pathParts := splitPath(r.URL.Path)
+	if len(pathParts) < 2 {
+		s.sendError(w, http.StatusBadRequest, "invalid_path", "Profile name is required")
 		return
 	}
 
-	// Get routing profile
-	profileObj := routing.GetProfile(req.Profile)
-
-	var routes []*routing.Route
-	var err error
-
-	if req.Alternatives > 0 {
-		s.router.SetProfile(profileObj)
-		routes, err = s.router.FindMultipleRoutes(req.FromLat, req.FromLon, req.ToLat, req.ToLon, req.Alternatives)
-		s.router.SetProfile(routing.CarProfile) // Reset to default
-	} else {
-		route, routeErr := s.router.FindRouteWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, profileObj)
-		if routeErr == nil {
-			routes = []*routing.Route{route}
-		}
-		err = routeErr
-	}
-
+	profileName := pathParts[1]
+	profile, err := s.profileManager.GetProfile(profileName)
 	if err != nil {
-		s.sendError(w, http.StatusNotFound, "no_route", err.Error())
+		s.sendError(w, http.StatusNotFound, "profile_not_found", err.Error())
 		return
 	}
 
-	response := RouteResponse{
-		Code:   "Ok",
-		Format: req.Format,
-		Routes: make([]RouteInfo, len(routes)),
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"code":    "Ok",
+		"profile": profile,
+	})
+}
+
+// HandleReloadProfiles handles reloading all profiles from disk
+func (s *Server) HandleReloadProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.sendError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST method is allowed")
+		return
 	}
 
-	for i, route := range routes {
-		coordinates := make([][2]float64, len(route.Nodes))
-		for j, nodeID := range route.Nodes {
-			node, _ := s.graph.GetNode(nodeID)
-			coordinates[j] = [2]float64{node.Lon, node.Lat}
-		}
-
-		var geometry interface{}
-		switch req.Format {
-		case "polyline":
-			geometry = encoding.EncodePolyline(coordinates)
-		default: // "geojson" or empty
-			geometry = encoding.NewLineStringGeometry(coordinates)
-		}
-
-		response.Routes[i] = RouteInfo{
-			Distance: route.Distance,
-			Duration: route.Duration,
-			Geometry: geometry,
-		}
+	if err := s.profileManager.Reload(); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "reload_failed", err.Error())
+		return
 	}
 
-	s.sendJSON(w, http.StatusOK, response)
+	profiles := s.profileManager.ListProfiles()
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"code":     "Ok",
+		"message":  "Profiles reloaded successfully",
+		"profiles": profiles,
+		"count":    len(profiles),
+	})
 }
 
 // UpdateWeightRequest represents a weight update request
@@ -297,8 +231,227 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	s.sendJSON(w, http.StatusOK, health)
 }
 
+// parseRouteQueryParams parses GET request query parameters into RouteRequest
+func (s *Server) parseRouteQueryParams(r *http.Request) (RouteRequest, error) {
+	q := r.URL.Query()
+	req := RouteRequest{}
+
+	// Required parameters
+	var err error
+	req.FromLat, err = strconv.ParseFloat(q.Get("from_lat"), 64)
+	if err != nil {
+		return req, fmt.Errorf("invalid from_lat")
+	}
+
+	req.FromLon, err = strconv.ParseFloat(q.Get("from_lon"), 64)
+	if err != nil {
+		return req, fmt.Errorf("invalid from_lon")
+	}
+
+	req.ToLat, err = strconv.ParseFloat(q.Get("to_lat"), 64)
+	if err != nil {
+		return req, fmt.Errorf("invalid to_lat")
+	}
+
+	req.ToLon, err = strconv.ParseFloat(q.Get("to_lon"), 64)
+	if err != nil {
+		return req, fmt.Errorf("invalid to_lon")
+	}
+
+	// Optional parameters
+	if alt := q.Get("alternatives"); alt != "" {
+		req.Alternatives, _ = strconv.Atoi(alt)
+	}
+
+	req.Format = q.Get("format")
+	req.Profile = q.Get("profile")
+
+	if uni := q.Get("unidirectional"); uni != "" {
+		req.Unidirectional, _ = strconv.ParseBool(uni)
+	}
+
+	// Runtime overrides
+	if val := q.Get("avoid_tolls"); val != "" {
+		b, _ := strconv.ParseBool(val)
+		req.AvoidTolls = &b
+	}
+
+	if val := q.Get("avoid_highways"); val != "" {
+		b, _ := strconv.ParseBool(val)
+		req.AvoidHighways = &b
+	}
+
+	if val := q.Get("avoid_ferries"); val != "" {
+		b, _ := strconv.ParseBool(val)
+		req.AvoidFerries = &b
+	}
+
+	if val := q.Get("avoid_tunnels"); val != "" {
+		b, _ := strconv.ParseBool(val)
+		req.AvoidTunnels = &b
+	}
+
+	if val := q.Get("allow_uturns"); val != "" {
+		b, _ := strconv.ParseBool(val)
+		req.AllowUturns = &b
+	}
+
+	if val := q.Get("max_speed"); val != "" {
+		f, _ := strconv.ParseFloat(val, 64)
+		req.MaxSpeed = &f
+	}
+
+	return req, nil
+}
+
+// getEffectiveProfile loads a profile and applies runtime options
+func (s *Server) getEffectiveProfile(req *RouteRequest) (*routing.ProfileConfig, error) {
+	profileName := req.Profile
+
+	// Use first available profile if not specified
+	if profileName == "" {
+		profiles := s.profileManager.ListProfiles()
+		if len(profiles) == 0 {
+			return nil, fmt.Errorf("no profiles available")
+		}
+		profileName = profiles[0]
+	}
+
+	// Get base profile
+	baseProfile, err := s.profileManager.GetProfile(profileName)
+	if err != nil {
+		return nil, fmt.Errorf("profile '%s' not found: %w", profileName, err)
+	}
+
+	// Build RouteOptions from request
+	options := &routing.RouteOptions{
+		AvoidTolls:    req.AvoidTolls,
+		AvoidHighways: req.AvoidHighways,
+		AvoidFerries:  req.AvoidFerries,
+		AvoidTunnels:  req.AvoidTunnels,
+		AllowUturns:   req.AllowUturns,
+		MaxSpeed:      req.MaxSpeed,
+	}
+
+	// Apply runtime options if any are set
+	return routing.GetEffectiveProfile(baseProfile, options), nil
+}
+
+// findRoutes finds routes using the effective profile
+func (s *Server) findRoutes(req RouteRequest, profile *routing.ProfileConfig) ([]*routing.Route, error) {
+	// Temporary bridge: Convert new ProfileConfig to old RoutingProfile
+	// This allows us to use the existing Router implementation
+	// TODO: Update Router to work directly with ProfileConfig
+	oldProfile := s.convertToOldProfile(profile)
+
+	var routes []*routing.Route
+	var err error
+
+	if req.Alternatives > 0 {
+		// Set profile temporarily for multiple routes
+		s.router.SetProfile(oldProfile)
+		routes, err = s.router.FindMultipleRoutes(req.FromLat, req.FromLon, req.ToLat, req.ToLon, req.Alternatives)
+	} else {
+		var route *routing.Route
+		var routeErr error
+
+		// Default to bidirectional A* (faster), unless explicitly disabled
+		if req.Unidirectional {
+			route, routeErr = s.router.FindRouteWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, oldProfile)
+		} else {
+			route, routeErr = s.router.FindRouteBidirectionalWithProfile(req.FromLat, req.FromLon, req.ToLat, req.ToLon, oldProfile)
+		}
+
+		if routeErr == nil {
+			routes = []*routing.Route{route}
+		}
+		err = routeErr
+	}
+
+	return routes, err
+}
+
+// convertToOldProfile converts new ProfileConfig to old RoutingProfile (temporary bridge)
+func (s *Server) convertToOldProfile(config *routing.ProfileConfig) routing.RoutingProfile {
+	// Build allowed highways map
+	allowedHighways := make(map[string]bool)
+	speedFactors := make(map[string]float64)
+
+	for hwType, hwConfig := range config.Highways {
+		allowedHighways[hwType] = hwConfig.Allowed
+		speedFactors[hwType] = hwConfig.SpeedFactor
+	}
+
+	// Build avoid surfaces map
+	avoidSurfaces := make(map[string]bool)
+	for surfaceType, surfaceConfig := range config.Surfaces {
+		// Consider surfaces with penalty > 2.0 as "avoided"
+		if surfaceConfig.Penalty > 2.0 {
+			avoidSurfaces[surfaceType] = true
+		}
+	}
+
+	return routing.RoutingProfile{
+		Name:            config.Name,
+		AllowedHighways: allowedHighways,
+		SpeedFactors:    speedFactors,
+		AvoidSurfaces:   avoidSurfaces,
+		MaxSpeed:        config.Settings.MaxSpeedKmh / 3.6, // Convert km/h to m/s
+	}
+}
+
+// sendRouteResponse builds and sends the route response
+func (s *Server) sendRouteResponse(w http.ResponseWriter, routes []*routing.Route, format string) {
+	// Determine output format (default: geojson)
+	if format == "" {
+		format = "geojson"
+	}
+
+	// Build response
+	response := RouteResponse{
+		Code:   "Ok",
+		Format: format,
+		Routes: make([]RouteInfo, len(routes)),
+	}
+
+	for i, route := range routes {
+		coordinates := make([][2]float64, len(route.Nodes))
+		for j, nodeID := range route.Nodes {
+			node, _ := s.graph.GetNode(nodeID)
+			coordinates[j] = [2]float64{node.Lon, node.Lat}
+		}
+
+		var geometry interface{}
+		switch format {
+		case "polyline":
+			geometry = encoding.EncodePolyline(coordinates)
+		default: // "geojson" or empty
+			geometry = encoding.NewLineStringGeometry(coordinates)
+		}
+
+		response.Routes[i] = RouteInfo{
+			Distance: route.Distance,
+			Duration: route.Duration,
+			Geometry: geometry,
+		}
+	}
+
+	s.sendJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) validateCoordinates(lat, lon float64) bool {
 	return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+}
+
+// splitPath splits URL path into parts
+func splitPath(path string) []string {
+	parts := []string{}
+	for _, p := range strings.Split(path, "/") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
 }
 
 func (s *Server) sendJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -320,13 +473,34 @@ func (s *Server) sendError(w http.ResponseWriter, status int, code, message stri
 func (s *Server) SetupRoutes() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/route", s.HandleRoute)
-	mux.HandleFunc("/route/get", s.HandleRouteGet)
+	// Route endpoints
+	mux.HandleFunc("/route", s.HandleRoute) // Supports both GET and POST
+
+	// Profile endpoints
+	mux.HandleFunc("/profiles", s.profileHandler)              // GET list, or specific profile
+	mux.HandleFunc("/profiles/reload", s.HandleReloadProfiles) // POST reload
+
+	// Utility endpoints
 	mux.HandleFunc("/weight/update", s.HandleUpdateWeight)
 	mux.HandleFunc("/health", s.HandleHealth)
 
 	// Add CORS and logging middleware
 	return s.loggingMiddleware(s.corsMiddleware(mux))
+}
+
+// profileHandler routes profile requests to appropriate handler
+func (s *Server) profileHandler(w http.ResponseWriter, r *http.Request) {
+	pathParts := splitPath(r.URL.Path)
+
+	if len(pathParts) == 1 {
+		// /profiles - list all profiles
+		s.HandleListProfiles(w, r)
+	} else if len(pathParts) == 2 {
+		// /profiles/{name} - get specific profile
+		s.HandleGetProfile(w, r)
+	} else {
+		s.sendError(w, http.StatusNotFound, "not_found", "Invalid profile endpoint")
+	}
 }
 
 // CORS middleware

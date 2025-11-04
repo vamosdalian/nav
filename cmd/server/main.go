@@ -87,21 +87,33 @@ func main() {
 		return
 	}
 
+	// Initialize profile manager
+	log.Println("Loading routing profiles...")
+	profileManager := routing.NewProfileManager("./profiles")
+	if err := profileManager.LoadProfiles(); err != nil {
+		log.Fatalf("Failed to load profiles: %v", err)
+	}
+
 	// Initialize router
 	router := routing.NewRouter(g)
 
-	// Initialize API server
-	apiServer := api.NewServer(router, g)
+	// Initialize API server with profile manager
+	apiServer := api.NewServer(router, g, profileManager)
 	handler := apiServer.SetupRoutes()
 
 	// Start HTTP server
 	addr := fmt.Sprintf(":%s", cfg.ServerPort)
 	log.Printf("Server listening on %s", addr)
 	log.Printf("API Endpoints:")
-	log.Printf("  POST /route - Find route between two points")
-	log.Printf("  GET  /route/get - Find route (query params)")
-	log.Printf("  POST /weight/update - Update edge weights")
-	log.Printf("  GET  /health - Health check")
+	log.Printf("  Route:")
+	log.Printf("    GET/POST /route - Find route between two points")
+	log.Printf("  Profiles:")
+	log.Printf("    GET  /profiles - List all available profiles")
+	log.Printf("    GET  /profiles/{name} - Get specific profile details")
+	log.Printf("    POST /profiles/reload - Reload profiles from disk")
+	log.Printf("  Utilities:")
+	log.Printf("    POST /weight/update - Update edge weights")
+	log.Printf("    GET  /health - Health check")
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
